@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import yaml
 
-from nx_bootstrap import iso
+from nitrux_factory import iso
 
 
 class ISOOrchestrationTests(unittest.TestCase):
@@ -34,8 +34,24 @@ class ISOOrchestrationTests(unittest.TestCase):
             with tarfile.open(rootfs_archive, "w:xz") as archive:
                 archive.add(rootfs, arcname=".")
 
+            data_dir = work / "iso-data"
+            (data_dir / "configs/scripts/stages").mkdir(parents=True)
+            (data_dir / "configs/scripts/others").mkdir(parents=True)
+            (data_dir / "configs/files/grub_files/live").mkdir(parents=True)
+            (data_dir / "configs/files/grub_files/theme").mkdir(parents=True)
+            (data_dir / "tooling").mkdir(parents=True)
+            for asset in (
+                "bootstrap",
+                "configs/scripts/stages/01-add-build-sources",
+                "configs/files/grub_files/live/grub.cfg",
+                "configs/files/grub_files/live/loopback.cfg",
+                "tooling/runch",
+                "tooling/mkiso",
+            ):
+                (data_dir / asset).write_text("fixture")
             config_path = work / "iso.yml"
             config = {"iso": {
+                "data_dir": str(data_dir),
                 "rootfs": {"path": str(rootfs_archive)},
                 "output_dir": str(work / "output"),
                 "image": "smoke.iso",

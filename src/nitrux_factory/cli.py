@@ -13,9 +13,9 @@ import yaml
 from rich.console import Console
 from rich.markup import escape
 
-from nx_bootstrap.iso import build_iso
-from nx_bootstrap.rootfs.orchestrator import create_base_system
-from nx_bootstrap.snapshot import run_snapshot
+from nitrux_factory.iso import build_iso
+from nitrux_factory.rootfs.orchestrator import create_base_system
+from nitrux_factory.snapshot import run_snapshot
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 console = Console()

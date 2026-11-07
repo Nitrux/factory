@@ -10,7 +10,7 @@ import tarfile
 import unittest
 from unittest.mock import patch
 
-from nx_bootstrap.rootfs import apt_worker
+from nitrux_factory.rootfs import apt_worker
 
 
 class Candidate:

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nx_bootstrap import snapshot
+from nitrux_factory import snapshot
 
 
 class Response:

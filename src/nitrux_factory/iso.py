@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright 2026 Nitrux Latinoamericana S.C.
 
-"""Build an ISO from a rootfs archive using the packaged ISO stages."""
+"""Build an ISO from a rootfs archive using externally supplied ISO assets."""
 
 from __future__ import annotations
 
@@ -30,29 +30,6 @@ from rich.progress import (
 from rich.text import Text
 
 console = Console()
-DATA_DIR = Path(__file__).parent / "data" / "iso"
-DEFAULT_STAGES = (
-    "01-add-build-sources",
-    "02-remove-systemd-packages",
-    "03-install-bootloader",
-    "04-install-kernel",
-    "05-install-openrc",
-    "06-install-casper",
-    "07-install-bootsplash",
-    "08-install-nitrux-base",
-    "09-install-hardware-support",
-    "10-install-nvidia-drivers",
-    "11-install-desktop-session",
-    "12-install-calamares",
-    "13-install-init-config",
-    "14-add-live-user",
-    "15-update-initram-config",
-    "16-remove-build-sources",
-    "17-add-misc-fixes",
-    "18-edit-conf-files",
-    "19-manual-checks",
-    "20-create-var-archive",
-)
 
 
 def _load_config(path: Path) -> tuple[dict, Path]:
@@ -66,6 +43,26 @@ def _load_config(path: Path) -> tuple[dict, Path]:
 def _resolve_path(value: str, config_dir: Path) -> Path:
     path = Path(value).expanduser()
     return path.resolve() if path.is_absolute() else (config_dir / path).resolve()
+
+
+def _iso_data_dir(value, config_dir: Path) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("iso.data_dir must specify an ISO asset directory")
+    data_dir = _resolve_path(value, config_dir)
+    required = (
+        "bootstrap",
+        "configs/scripts/stages",
+        "configs/scripts/others",
+        "configs/files/grub_files",
+        "tooling/runch",
+        "tooling/mkiso",
+    )
+    missing = [relative for relative in required if not (data_dir / relative).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"ISO asset directory {data_dir} is missing: {', '.join(missing)}"
+        )
+    return data_dir
 
 
 def _rootfs_config(value, config_dir: Path) -> tuple[str, Path | None, str | None]:
@@ -135,22 +132,20 @@ def _download_rootfs(url: str, destination: Path, expected_sha256: str) -> Path:
     return destination
 
 
-def _iso_stages(value) -> list[str]:
-    if value is None:
-        stages = list(DEFAULT_STAGES)
-    elif isinstance(value, list) and all(isinstance(stage, str) for stage in value):
-        stages = value
-    else:
-        raise ValueError("iso.stages must be a list of stage names")
+def _iso_stages(value, data_dir: Path) -> list[str]:
+    if not isinstance(value, list) or not value or not all(isinstance(stage, str) for stage in value):
+        raise ValueError("iso.stages must be a non-empty list of stage names")
+    stages = value
+    if len(stages) != len(set(stages)):
+        raise ValueError("iso.stages must not contain duplicates")
 
-    available = {path.name for path in (DATA_DIR / "configs/scripts/stages").iterdir() if path.is_file()}
-    if not stages or len(stages) != len(set(stages)):
-        raise ValueError("iso.stages must be a non-empty list without duplicates")
+    stage_dir = data_dir / "configs/scripts/stages"
+    available = {path.name for path in stage_dir.iterdir() if path.is_file()}
     for stage in stages:
         if not re.fullmatch(r"[0-9]{2}-[A-Za-z0-9_.-]+", stage) or stage.startswith("00-"):
             raise ValueError(f"Invalid ISO stage name: {stage}")
         if stage not in available:
-            raise ValueError(f"ISO stage does not exist: {stage}")
+            raise ValueError(f"ISO stage does not exist in {stage_dir}: {stage}")
     return stages
 
 
@@ -182,7 +177,8 @@ def build_iso(config_path: Path) -> dict[str, Path]:
         raise RuntimeError("ISO builds require root privileges for chroot mounts and image tools")
     config, config_dir = _load_config(config_path)
     rootfs_kind, rootfs_path, rootfs_checksum = _rootfs_config(config.get("rootfs"), config_dir)
-    stages = _iso_stages(config.get("stages"))
+    data_dir = _iso_data_dir(config.get("data_dir"), config_dir)
+    stages = _iso_stages(config.get("stages"), data_dir)
     flavor = config.get("flavor", "mesa")
     if flavor not in ("mesa", "nvopen"):
         raise ValueError("iso.flavor must be 'mesa' or 'nvopen'")
@@ -242,11 +238,12 @@ def build_iso(config_path: Path) -> dict[str, Path]:
     if config.get("prepare_host", True):
         console.rule("[bold green]🧰 Factory · ISO")
         console.print("[cyan]Installing ISO build dependencies[/cyan]")
-        subprocess.run(
-            ["bash", str(DATA_DIR / "configs/scripts/stages/00-install-host-packages")],
-            cwd=DATA_DIR,
-            check=True,
-        )
+        host_dependency_stage = data_dir / "configs/scripts/stages/00-install-host-packages"
+        if not host_dependency_stage.is_file():
+            raise FileNotFoundError(
+                f"ISO asset directory is missing host dependency stage: {host_dependency_stage}"
+            )
+        subprocess.run(["bash", str(host_dependency_stage)], cwd=data_dir, check=True)
 
     required_tools = (
         "unshare", "chroot", "mount", "umount", "mountpoint", "lsof", "fuser",
@@ -299,9 +296,9 @@ def build_iso(config_path: Path) -> dict[str, Path]:
         tooling_dir = work_dir / "tooling"
         tooling_dir.mkdir()
         for tool_name in ("runch", "mkiso"):
-            packaged_tool = DATA_DIR / "tooling" / tool_name
+            supplied_tool = data_dir / "tooling" / tool_name
             installed_tool = tooling_dir / tool_name
-            shutil.copy2(packaged_tool, installed_tool)
+            shutil.copy2(supplied_tool, installed_tool)
             installed_tool.chmod(0o755)
 
         env = os.environ.copy()
@@ -313,7 +310,7 @@ def build_iso(config_path: Path) -> dict[str, Path]:
         bootstrap_command = [
             "unshare", "--mount", "--", "bash", "-c",
             'printf "\\n>--- Starting Runch ---\\n"; exec runch "$@"', "_",
-            "-m", f"{DATA_DIR / 'configs'}:/configs",
+            "-m", f"{data_dir}:/configs",
             "-r", "configs",
             str(root_dir), "bash", "/configs/bootstrap", *stages,
         ]
@@ -362,7 +359,7 @@ def build_iso(config_path: Path) -> dict[str, Path]:
             check=True,
         )
 
-        grub = DATA_DIR / "configs/files/grub_files"
+        grub = data_dir / "configs/files/grub_files"
         console.print("[cyan]Creating bootable ISO[/cyan]")
         subprocess.run(
             [

@@ -1,7 +1,0 @@
-########################
-#  Repository Priority #
-########################
-
-Package: *
-Pin: origin packagecloud.io
-Pin-Priority: 600

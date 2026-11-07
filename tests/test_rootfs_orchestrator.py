@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nx_bootstrap.rootfs import orchestrator
+from nitrux_factory.rootfs import orchestrator
 
 
 class RootfsOrchestrationTests(unittest.TestCase):

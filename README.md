@@ -1,6 +1,6 @@
 # Factory | [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
-Nitrux rootfs and ISO build tooling.
+Rootfs and ISO build tooling.
 
 `Factory` builds root filesystems and ISO images from YAML configurations. It uses python-apt to configure repositories, resolve dependencies, and install packages, then runs the selected ISO stages.
 

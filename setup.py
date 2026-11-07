@@ -10,8 +10,6 @@ setup(
     version="0.0.1",
     packages=find_packages("src"),
     package_dir={"": "src"},
-    include_package_data=True,
-    package_data={"nx_bootstrap": ["data/**/*"]},
     install_requires=[
         "typer",
         "rich",
@@ -20,12 +18,12 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "factory=nx_bootstrap.cli:main"
+            "factory=nitrux_factory.cli:main"
         ]
     },
     author="Uri Herrera",
     author_email="uri_herrera@nxos.org",
-    description="Build Nitrux root filesystems and ISO images from YAML configurations.",
+    description="Build root filesystems and ISO images from YAML configurations.",
     url="https://github.com/Nitrux/nbs",
     classifiers=[
         "Programming Language :: Python :: 3",

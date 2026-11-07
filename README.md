@@ -6,9 +6,13 @@
 
 # Introduction
 
-Factory is system for Nitrux using YAML configurations to create rootfs archives and ISO images.
+Factory builds Nitrux rootfs archives and ISO images from YAML configurations, and creates verified snapshots of selected APT packages.
 
-It uses [Python APT](https://apt-team.pages.debian.net/python-apt/library/index.html) to configure repositories, resolve dependencies, and install packages, then runs the selected ISO stages.
+Rootfs builds use [Python APT](https://apt-team.pages.debian.net/python-apt/library/index.html) to configure repositories, resolve dependencies, and install packages.
+
+ISO builds turn a rootfs archive into an image using stages and tools supplied through the ISO configuration. 
+
+Snapshots download selected `.deb` files and verify their SHA-256 checksums so that you can retain or publish those packages separately from their upstream repository.
 
 > [!WARNING]
 > Factory primarily targets Nitrux OS, and using this utility in other distributions may or may not work. Compatibility with other distributions is incidental, not intentional.

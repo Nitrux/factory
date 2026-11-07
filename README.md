@@ -77,9 +77,14 @@ Use the commands below to build artifacts or download package snapshots.
 ## Examples
 
 ```
+# Rootfs and ISO creation require root privileges.
+
 sudo factory build --rfs <file>
 sudo factory build --iso <file>
-factory snapshot
+
+# Snapshots do not require root privileges.
+
+factory snapshot <file>
 ```
 
 # Licensing

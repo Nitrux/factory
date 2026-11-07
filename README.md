@@ -70,9 +70,17 @@ sudo pipx uninstall --global factory
 Use the commands below to build artifacts or download package snapshots.
 
 - `build` → Builds a rootfs archive or an ISO. Specify exactly one build target.
-  - `--rfs <file>` → Reads a rootfs YAML file, installs the fixed minbase plus the listed packages from its configured APT repositories, and creates a compressed rootfs archive. Run as `factory build --rfs <file>`.
-  - `--iso <file>` → Reads an ISO YAML file, uses its rootfs archive and external ISO assets, runs the selected stages, and creates an ISO image. Run as `factory build --iso <file>`.
-- `snapshot <file>` → Reads a snapshot YAML file, downloads the selected Debian packages from the configured APT repository, and verifies their SHA-256 checksums. Run as `factory snapshot <file>`.
+  - `--rfs <file>` → Reads a rootfs YAML file, installs the fixed minbase plus the listed packages from its configured APT repositories, and creates a compressed rootfs archive.
+  - `--iso <file>` → Reads an ISO YAML file, uses its rootfs archive and external ISO assets, runs the selected stages, and creates an ISO image.
+- `snapshot <file>` → Reads a snapshot YAML file, downloads the selected Debian packages from the configured APT repository, and verifies their SHA-256 checksums.
+
+## Examples
+
+```
+sudo factory build --rfs <file>
+sudo factory build --iso <file>
+factory snapshot
+```
 
 # Licensing
 

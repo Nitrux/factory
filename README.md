@@ -6,7 +6,7 @@
 
 # Introduction
 
-Factory is system for Nitrux using YAML configurations to create a rootfs and ISO images.
+Factory is system for Nitrux using YAML configurations to create rootfs archives and ISO images.
 
 It uses [Python APT](https://apt-team.pages.debian.net/python-apt/library/index.html) to configure repositories, resolve dependencies, and install packages, then runs the selected ISO stages.
 

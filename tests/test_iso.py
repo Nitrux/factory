@@ -1,0 +1,113 @@
+import subprocess
+import tarfile
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import yaml
+
+from nx_bootstrap import iso
+
+
+class ISOOrchestrationTests(unittest.TestCase):
+    def test_builds_from_local_archive_and_writes_outputs(self):
+        real_run = subprocess.run
+        real_popen = subprocess.Popen
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            rootfs = work / "rootfs"
+            files = (
+                "etc/placeholder",
+                "boot/vmlinuz-1",
+                "boot/initrd.img-1",
+                "usr/lib/shim/shimx64.efi.signed",
+                "usr/lib/shim/mmx64.efi.signed",
+                "usr/lib/grub/x86_64-efi-signed/gcdx64.efi.signed",
+            )
+            for name in files:
+                path = rootfs / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture")
+
+            rootfs_archive = work / "rootfs.tar.xz"
+            with tarfile.open(rootfs_archive, "w:xz") as archive:
+                archive.add(rootfs, arcname=".")
+
+            config_path = work / "iso.yml"
+            config = {"iso": {
+                "rootfs": {"path": str(rootfs_archive)},
+                "output_dir": str(work / "output"),
+                "image": "smoke.iso",
+                "prepare_host": False,
+                "flavor": "nvopen",
+                "stages": ["01-add-build-sources"],
+                "squashfs": {"compression": "zstd", "level": 18},
+            }}
+            config_path.write_text(yaml.safe_dump(config))
+            mesa_config = {"iso": {
+                **config["iso"],
+                "output_dir": str(work / "mesa-output"),
+                "image": "mesa-smoke.iso",
+                "flavor": "mesa",
+            }}
+            mesa_config_path = work / "mesa.yml"
+            mesa_config_path.write_text(yaml.safe_dump(mesa_config))
+            observed = {"stage_environments": []}
+
+            def run(command, **kwargs):
+                if command[0] == "tar":
+                    observed["extract"] = command
+                    with patch.object(subprocess, "Popen", real_popen):
+                        return real_run(command, **kwargs)
+                if command[0] == "sbverify":
+                    return subprocess.CompletedProcess(command, 0)
+                if command[0] == "mksquashfs":
+                    observed["squashfs"] = command
+                    Path(command[2]).write_text("squashfs")
+                    return subprocess.CompletedProcess(command, 0)
+                if command[0] == "mkiso":
+                    Path(command[-1]).write_text("iso")
+                    return subprocess.CompletedProcess(command, 0)
+                with patch.object(subprocess, "Popen", real_popen):
+                    return real_run(command, **kwargs)
+
+            class FakeStageRunner:
+                stdout = ()
+
+                def wait(self):
+                    stage_root = Path(observed["stage_root"])
+                    (stage_root / "installed_pkgs_start.txt").write_text("start")
+                    (stage_root / "installed_pkgs_end.txt").write_text("end")
+                    return 0
+
+            def popen(command, **kwargs):
+                observed["stage_root"] = kwargs["cwd"]
+                observed["stage_command"] = command
+                observed["stage_environments"].append(kwargs["env"]["ISO_BRANCH"])
+                return FakeStageRunner()
+
+            with patch.object(iso.os, "geteuid", return_value=0), \
+                 patch.object(iso.shutil, "which", return_value="/bin/true"), \
+                 patch.object(iso.subprocess, "run", side_effect=run), \
+                 patch.object(iso.subprocess, "Popen", side_effect=popen):
+                result = iso.build_iso(config_path)
+                mesa_result = iso.build_iso(mesa_config_path)
+
+            self.assertTrue(result["image"].is_file())
+            self.assertTrue(mesa_result["image"].is_file())
+            self.assertTrue(result["checksum"].is_file())
+            self.assertEqual(len(result["package_lists"]), 2)
+            self.assertIn("01-add-build-sources", observed["stage_command"])
+            self.assertEqual(observed["stage_environments"], ["nvopen", "mesa"])
+            self.assertIn("--numeric-owner", observed["extract"])
+            self.assertIn("--xattrs", observed["extract"])
+            self.assertIn("--xattrs-include=*", observed["extract"])
+            self.assertIn("--acls", observed["extract"])
+            squashfs = observed["squashfs"]
+            self.assertEqual(squashfs[squashfs.index("-comp") + 1], "zstd")
+            self.assertEqual(squashfs[squashfs.index("-Xcompression-level") + 1], "18")
+
+
+if __name__ == "__main__":
+    unittest.main()

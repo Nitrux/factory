@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2023-2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+set -eu
+
+# -- Source APT commands as functions.
+# shellcheck source=/dev/null
+
+source /configs/scripts/others/apt-funcs
+
+
+# -- Install Nitrux hardware support packages.
+
+INSTALL_NITRUX_HW_SUPPORT_PKGS=(
+    nitrux-hardware-drivers
+    nitrux-xserver-drivers
+)
+
+INSTALL_ADDITIONAL_HW_SUPPORT_PKGS=(
+    broadcom-sta-dkms/duke
+    multipath-tools/duke
+)
+
+if [ "${ISO_BRANCH:-mesa}" = "nvopen" ]; then
+    INSTALL_ADDITIONAL_HW_SUPPORT_PKGS+=(
+        firmware-nvidia-graphics
+        firmware-nvidia-gsp
+        firmware-nvidia-tesla-550-gsp
+    )
+fi
+
+install "${INSTALL_NITRUX_HW_SUPPORT_PKGS[@]}" "${INSTALL_ADDITIONAL_HW_SUPPORT_PKGS[@]}"
+
+
+# -- Variables for DKMS installs.
+
+ORIGINAL_DIR=$(pwd)
+
+
+# -- Install xone and the firmware.
+# -- FIXME: There are no Debian packages available; if and when there are, switch to using them instead.
+
+TEMP_DIR1="$(mktemp -d)"
+git clone https://github.com/bazzite-org/xonedo "$TEMP_DIR1"
+cd "$TEMP_DIR1"
+
+VERSION=$(git describe --tags 2>/dev/null || echo "0.3")
+VERSION=${VERSION##v}
+mkdir -p "/usr/src/xone-$VERSION"
+cp -r . "/usr/src/xone-$VERSION"
+find "/usr/src/xone-$VERSION" -type f \( -name dkms.conf -o -name '*.c' \) -exec sed -i "s/#VERSION#/$VERSION/" {} +
+dkms add -m xone -v "$VERSION"
+dkms build -m xone -v "$VERSION"
+dkms install --force -m xone -v "$VERSION"
+
+mkdir -p /etc/modprobe.d
+mv install/modprobe.conf /etc/modprobe.d/xone-blacklist.conf
+chmod 644 /etc/modprobe.d/xone-blacklist.conf
+
+cd "$ORIGINAL_DIR"
+rm -rf "$TEMP_DIR1"
+
+BIN_URL='https://raw.githubusercontent.com/Nitrux/storage/master/Other/xone-dongle-fw/FW_ACC_00U.bin'
+
+mkdir -p /usr/lib/firmware
+curl -L "$BIN_URL" -o /usr/lib/firmware/xow_dongle.bin
+chmod 0644 /usr/lib/firmware/xow_dongle.bin
+
+ln -sf /usr/lib/firmware/xow_dongle.bin /usr/lib/firmware/xow_dongle_045e_02e6.bin
+ln -sf /usr/lib/firmware/xow_dongle.bin /usr/lib/firmware/xone_dongle_02e6.bin
+
+
+# -- Install Looking Glass (kvmfr) kernel module for low-latency VM windowing.
+# -- FIXME: There are no Debian packages available; if and when there are, switch to using them instead.
+
+BRANCH="Release/B7"
+VERSION="B7"
+TEMP_DIR5="$(mktemp -d)"
+SRC_URL="https://github.com/gnif/LookingGlass.git"
+DST_DIR="/usr/src/looking-glass-$VERSION"
+
+git clone --depth 1 --branch "$BRANCH" "$SRC_URL" "$TEMP_DIR5"
+
+mkdir -p "$DST_DIR"
+cp -a "$TEMP_DIR5/module/." "$DST_DIR/"
+
+sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"$VERSION\"/" "$DST_DIR/dkms.conf"
+
+dkms add -m looking-glass -v "$VERSION"
+dkms build -m looking-glass -v "$VERSION"
+dkms install --force -m looking-glass -v "$VERSION"
+
+printf '%s\n' 'SUBSYSTEM=="kvmfr", OWNER="root", GROUP="kvm", MODE="0660"' > /etc/udev/rules.d/99-kvmfr.rules
+printf '%s\n' 'kvmfr' > /etc/modules-load.d/kvmfr.conf
+printf '%s\n' 'options kvmfr static_size_mb=32' > /etc/modprobe.d/kvmfr.conf
+
+rm -rf "$TEMP_DIR5"
+cd "$ORIGINAL_DIR"
+
+
+# -- Manual mitigation for CVE-2026-31431 (Copy Fail).
+
+cat >/etc/modprobe.d/disable-algif-aead.conf <<EOF
+install algif_aead /bin/false
+install algif_skcipher /bin/false
+install algif_hash /bin/false
+install algif_rng /bin/false
+EOF
+
+
+# -- Manual mitigation for CVE-2026-43284 and CVE-2026-43500 (Dirty Frag and Fragnesia).
+
+cat >/etc/modprobe.d/disable-esp-ipsec.conf <<EOF
+install esp4 /bin/false
+install esp6 /bin/false
+install rxrpc /bin/false
+EOF

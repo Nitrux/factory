@@ -1,26 +1,6 @@
 #!/usr/bin/env python3
-
-#############################################################################################################################################################################
-#   The license used for this file and its contents is: BSD-3-Clause                                                                                                        #
-#                                                                                                                                                                           #
-#   Copyright <2025> <Uri Herrera <uri_herrera@nxos.org>>                                                                                                                   #
-#                                                                                                                                                                           #
-#   Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:                          #
-#                                                                                                                                                                           #
-#    1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.                                        #
-#                                                                                                                                                                           #
-#    2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer                                      #
-#       in the documentation and/or other materials provided with the distribution.                                                                                         #
-#                                                                                                                                                                           #
-#    3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software                    #
-#       without specific prior written permission.                                                                                                                          #
-#                                                                                                                                                                           #
-#    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,                      #
-#    THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS                  #
-#    BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE                 #
-#    GOODS OR SERVICES; LOSS OF USE, DATA,   OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,                      #
-#    STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.   #
-#############################################################################################################################################################################
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright <2025> <Uri Herrera <uri_herrera@nxos.org>>
 
 import gzip
 import random
@@ -48,29 +28,6 @@ from .utensils import cleanup_cache
 cache_dir = Path.home() / ".cache/nbs-cli"
 
 
-# -- Mirors for supported distributions.
-
-debian_mirrors = [
-    "https://ftp.debian.org/debian",
-    "https://uk.mirrors.clouvider.net/debian",
-    "https://atl.mirrors.clouvider.net/debian",
-    "https://ftp.tu-clausthal.de/debian",
-]
-
-ubuntu_mirrors = [
-    "https://archive.ubuntu.com/ubuntu",
-    "https://security.ubuntu.com/ubuntu",
-    "https://mirrors.kernel.org/ubuntu",
-]
-
-devuan_mirrors = [
-    "http://deb.devuan.org/merged",
-]
-
-nitrux_mirrors = [
-    "https://packagecloud.io/nitrux/mauikit/debian",
-]
-
 # -- Debounce per host.
 
 last_access_time = {}
@@ -94,54 +51,31 @@ session.mount("http://", adapter)
 session.mount("https://", adapter)
 
 
-def get_mirrors_for_distro(distro):
-    return {
-        "debian": debian_mirrors,
-        "ubuntu": ubuntu_mirrors,
-        "devuan": devuan_mirrors,
-        "nitrux": nitrux_mirrors
-    }.get(distro, None)
-
-
 console = Console()
 
 def build_probe_tasks(repos, pkg_name, quiet):
     """
-    Build probe tasks that randomly distribute mirrors to balance load,
-    avoiding hitting the same mirror with multiple concurrent requests unnecessarily.
+    Build probe tasks using the repository URLs provided in the YAML.
     """
     tasks = []
     for repo in repos:
         if "ppa" in repo:
             continue
 
-        distro = repo.get("distro", "").lower()
-        release = repo.get("release")
-        arch = repo.get("arch")
+        uri = repo.get("url") or repo.get("uri")
+        release = repo.get("release") or repo.get("suite")
+        arch = repo.get("arch") or repo.get("architecture")
         components = repo.get("components", ["main"])
 
-        if not (distro and release and arch):
+        if not (uri and release and arch):
             if not quiet:
                 console.print(
                     f"[red]⛔ Error:[/red] Missing required repo keys for [bold]{pkg_name} → {repo}[/bold]"
                 )
             continue
 
-        mirror_list = get_mirrors_for_distro(distro)
-        if not mirror_list:
-            if not quiet:
-                console.print(
-                    f"[yellow]🚧 Skipping[/yellow] unknown distro: [bold]{distro}[/bold]"
-                )
-            continue
-
-        mirror_list = mirror_list[:]
-        random.shuffle(mirror_list)
-
         for component in components:
-            for mirror in mirror_list:
-                tasks.append((mirror, release, arch, pkg_name, component))
-                break
+            tasks.append((uri.rstrip("/"), release, arch, pkg_name, component))
 
     return tasks
 

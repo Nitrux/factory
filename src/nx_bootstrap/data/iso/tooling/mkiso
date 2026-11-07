@@ -1,0 +1,170 @@
+#!/usr/bin/env sh
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2017-2026 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+
+# -- Functions.
+
+put() { printf "%b\n" "$@"; }
+err() { put "runch: \033[31mError:\033[m $*" >&2; exit 1; }
+
+
+# -- Option parsing.
+
+while :; do
+    case "$1" in
+        -V )  label="$2"; shift 2;;
+        -g )  cfg_files="$cfg_files $2"; shift 2;;
+        -t ) themes="${themes:+$themes }$2"; shift 2;;
+        --shim ) shim_img="$2"; shift 2;;
+        --grub-efi ) grub_efi_img="$2"; shift 2;;
+        --mok-manager ) mok_manager_img="$2"; shift 2;;
+        -b )  bios=y; shift;;
+        -e )  uefi=y; shift;;
+        -d | --debug ) set -x; shift;;
+        -h | --help )
+            put "mkiso: Generate bootable ISO images." \
+                "" \
+                "Usage:" \
+                "  mkiso [-h|--help]            Show this help." \
+                "  mkiso [options] <dir> <img>  Generate img with contents from dir." \
+                "" \
+                "Options:" \
+                "  -d, --debug    Enable debugging messages." \
+                "  -b             Enable BIOS support." \
+                "  -e             Enable UEFI support." \
+                "  -V label       Use label as filesystem label." \
+                "  -g file        Use file as a GRUB configuration file." \
+                "  -t path        Use path as a GRUB theme." \
+                "  --shim file    Use the signed shim EFI binary." \
+                "  --grub-efi file Use the signed GRUB EFI binary." \
+                "  --mok-manager file Use the signed MOK manager EFI binary."
+            exit;;
+        -* )  err "Unknown option '$1'.";;
+        * )   break;;
+    esac
+done
+
+
+# -- Check the command line.
+
+test $# -eq 2 || err "Bad command line. Wrong number of arguments."
+
+iso_dir=$(realpath "$1") || err "'$1' is not a valid directory."
+output=$2
+
+
+# -- Copy the configuration files.
+
+if [ -n "$cfg_files" ]; then
+    mkdir -p "$iso_dir/boot/grub"
+
+    # shellcheck disable=SC2086
+    cp -- $cfg_files "$iso_dir/boot/grub"
+fi
+
+
+# -- Copy the themes.
+
+if [ -n "$themes" ]; then
+    mkdir -p "$iso_dir/boot/grub/themes"
+    cp -r "$themes" "$iso_dir/boot/grub/themes"
+fi
+
+
+# -- Generate boot artifacts.
+
+if [ "$bios" = y ]; then
+    bios_img="bios.img"
+    grub-mkimage -O i386-pc-eltorito \
+                 -o "$iso_dir/$bios_img" \
+                 -p /boot/grub \
+                 biosdisk boot linux search normal configfile part_gpt btrfs ext2 fat iso9660 loopback test keystatus gfxmenu regexp probe all_video gfxterm font echo read ls cat png jpeg halt reboot
+
+    bios_opts="
+        -eltorito-alt-boot
+        -b bios.img
+        -no-emul-boot
+        -graft-points bios.img=$iso_dir/$bios_img
+        -boot-load-size 4
+        -boot-info-table
+        -c boot.cat
+        --grub2-boot-info
+        --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img
+    "
+fi
+
+if [ "$uefi" = y ]; then
+    : "${shim_img:=/usr/lib/shim/shimx64.efi.signed}"
+    : "${grub_efi_img:=/usr/lib/grub/x86_64-efi-signed/gcdx64.efi.signed}"
+    : "${mok_manager_img:=/usr/lib/shim/mmx64.efi.signed}"
+
+    for efi_file in "$shim_img" "$grub_efi_img" "$mok_manager_img"; do
+        if [ ! -r "$efi_file" ]; then
+            err "Signed EFI image '$efi_file' not found. Install the signed shim, GRUB, and MOK manager packages."
+        fi
+    done
+
+    if ! command -v sbverify >/dev/null 2>&1; then
+        err "The 'sbverify' command is required to validate Secure Boot EFI images. Install sbsigntool."
+    fi
+
+    for efi_file in "$shim_img" "$grub_efi_img" "$mok_manager_img"; do
+        if ! sbverify --list "$efi_file" >/dev/null 2>&1; then
+            err "EFI image '$efi_file' is not signed or has an invalid signature."
+        fi
+    done
+
+    mkdir -p "$iso_dir/.disk"
+    : > "$iso_dir/.disk/info"
+
+    export MTOOLS_SKIP_CHECK=1
+
+    efi_size_kib=$(( (
+        $(wc -c < "$shim_img") +
+        $(wc -c < "$grub_efi_img") +
+        $(wc -c < "$mok_manager_img") +
+        1048575
+    ) / 1024 ))
+
+    mkfs.vfat -C "$iso_dir/efi.img" "$efi_size_kib"
+    mmd -i "$iso_dir/efi.img" ::EFI
+    mmd -i "$iso_dir/efi.img" ::EFI/BOOT
+    mcopy -i "$iso_dir/efi.img" "$shim_img" ::EFI/BOOT/BOOTX64.EFI
+    mcopy -i "$iso_dir/efi.img" "$grub_efi_img" ::EFI/BOOT/grubx64.efi
+    mcopy -i "$iso_dir/efi.img" "$mok_manager_img" ::EFI/BOOT/mmx64.efi
+
+    uefi_opts="
+        -eltorito-alt-boot
+        -no-emul-boot
+        -e efi.img
+        -graft-points efi.img="$iso_dir/efi.img"
+        -append_partition 1 0xef "$iso_dir/efi.img"
+    "
+fi
+
+
+# -- Check if at least one boot option is selected.
+
+if [ -z "$bios_opts" ] && [ -z "$uefi_opts" ]; then
+    err "Neither BIOS nor UEFI boot options selected."
+fi
+
+
+# -- Generate ISO image.
+
+# shellcheck disable=SC2086
+
+xorriso -as mkisofs \
+    -iso-level 3 \
+    -full-iso9660-filenames \
+    -volid "$label" \
+    -o "$output" \
+    "$iso_dir" \
+    $bios_opts \
+    $uefi_opts \
+    -hfsplus \
+    -hfsplus-serial-no fc4d1567781ece66 \
+    -hfsplus-block-size 512 \
+    -apm-block-size 512

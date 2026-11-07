@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2017-2026 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+
+set -eu
+
+export LANG=C
+export LC_ALL=C
+export DEBIAN_FRONTEND=noninteractive
+export PATH=$PATH:/tmp/factory/stages
+export TERM=dumb
+
+
+# -- Functions.
+
+puts () { printf "\n\n --- %s\n" "$*"; }
+
+
+#====================	START
+
+puts "STARTING BOOTSTRAP."
+
+
+# -- Source APT commands as functions.
+# shellcheck source=/dev/null
+
+source /configs/scripts/others/apt-funcs
+
+
+# -- Add APT configuration.
+
+cp -r /configs/files/apt_preferences/* /etc/apt/preferences.d/
+cp -r /configs/files/apt_conf/* /etc/apt/apt.conf.d/
+
+
+# -- Create scripts directory in /tmp and move the stages scripts here.
+
+mkdir -p /tmp/factory/stages
+
+cp /configs/scripts/stages/* /tmp/factory/stages
+
+
+###############################
+# INFORMATION:                #
+# Root content starts here    #
+###############################
+
+# -- Create a list of the installed packages in the rootfs.
+
+list_installed_text_start
+
+
+# -- Run the selected ISO build stages.
+
+if [ "$#" -eq 0 ]; then
+    set -- \
+        01-add-build-sources \
+        02-remove-systemd-packages \
+        03-install-bootloader \
+        04-install-kernel \
+        05-install-openrc \
+        06-install-casper \
+        07-install-bootsplash \
+        08-install-nitrux-base \
+        09-install-hardware-support \
+        10-install-nvidia-drivers \
+        11-install-desktop-session \
+        12-install-calamares \
+        13-install-init-config \
+        14-add-live-user \
+        15-update-initram-config \
+        16-remove-build-sources \
+        17-add-misc-fixes \
+        18-edit-conf-files \
+        19-manual-checks \
+        20-create-var-archive
+fi
+
+for stage in "$@"; do
+    case "$stage" in
+        00-*|*[!A-Za-z0-9_.-]*)
+            printf "Invalid ISO stage: %s\n" "$stage" >&2
+            exit 1
+            ;;
+    esac
+    [ -f "/tmp/factory/stages/$stage" ] || {
+        printf "ISO stage not found: %s\n" "$stage" >&2
+        exit 1
+    }
+    puts "$stage"
+    bash "/tmp/factory/stages/$stage"
+done
+
+list_installed_text_end
+
+
+puts "EXITING BOOTSTRAP."
+
+puts ""
+
+#====================	END

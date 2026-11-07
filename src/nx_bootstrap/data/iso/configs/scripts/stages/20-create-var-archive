@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2023-2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+set -eu
+
+# -- Source useful functions.
+# shellcheck source=/dev/null
+
+source /configs/scripts/others/misc-funcs
+
+
+# -- Create var data archive for NUTS.
+
+DISTRIB_RELEASE=$(grep 'DISTRIB_RELEASE' /etc/lsb-release | cut -d'=' -f2)
+
+tar -cJf "var-lib-dpkg-$DISTRIB_RELEASE.tar.xz" -P /var/lib/dpkg/

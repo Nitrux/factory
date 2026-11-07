@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2023-2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+set -eu
+
+# -- Source useful functions.
+# shellcheck source=/dev/null
+
+source /configs/scripts/others/misc-funcs
+
+
+# -- Add or replace hook scripts for initramfs.
+
+cp -r /configs/files/initramfs_files/hooks/* /etc/initramfs-tools/hooks/
+
+chmod +x /etc/initramfs-tools/hooks/*
+
+
+# -- Remove upstream's initramfs microcode hooks and replace them with ours.
+
+rm -f /usr/share/initramfs-tools/hooks/{amd,intel}_microcode
+
+cp /etc/initramfs-tools/hooks/amd64_microcode /usr/share/initramfs-tools/hooks/amd64_microcode
+cp /etc/initramfs-tools/hooks/intel_microcode /usr/share/initramfs-tools/hooks/intel_microcode
+
+
+# -- Add initramfs configuration.
+
+cp -r /configs/files/initramfs_files/conf.d/* /etc/initramfs-tools/conf.d/
+
+
+# -- Remove these lines from /usr/share/initramfs-tools/scripts/casper because they're irrelevant here and remove these scripts from casper as we don't use them.
+
+sed -i '/touch \/root\/var\/crash\/crash.init/d; /rm \/root\/var\/crash\/crash.init/d' /usr/share/initramfs-tools/scripts/casper
+
+DELETE_CASPER_INITRD_SCRIPTS=(
+    31disable_update_notifier
+    33enable_apport_crashes
+    52gnome_initial_setup
+    53disable_unattended_upgrades
+    59disable_mozc_autosetup
+)
+
+rm -f "${DELETE_CASPER_INITRD_SCRIPTS[@]/#//usr/share/initramfs-tools/scripts/casper-bottom/}"
+
+
+# -- Replace upstream's update-initramfs with our improved, dpkg-less version
+
+cat /configs/files/initramfs_files/update-initramfs > /usr/sbin/update-initramfs
+
+
+# -- Add modules to initramfs.
+
+printf '%s\n' exfat >> /etc/initramfs-tools/modules
+
+
+# -- Always update initramfs after adding, removing or editing hooks or scripts.
+
+update-initramfs -c -k all

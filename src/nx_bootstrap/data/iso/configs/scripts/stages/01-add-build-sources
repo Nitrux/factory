@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2023-2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+set -eu
+
+# -- Source APT commands as functions.
+# shellcheck source=/dev/null
+
+source /configs/scripts/others/apt-funcs
+
+
+# -- Add Nitrux repository keys.
+
+add_nitrux_key testing
+add_nitrux_key area51
+add_nitrux_key skidrow
+add_nitrux_key mauikit
+if [ "${ISO_BRANCH:-mesa}" = "nvopen" ]; then
+    add_nitrux_key nvidia
+fi
+add_nitrux_key testing-fresh
+add_nitrux_key mauikit-fresh
+
+# -- Add build sources.
+
+cp /configs/files/sources/* /etc/apt/sources.list.d/
+
+if [ "${ISO_BRANCH:-mesa}" = "nvopen" ]; then
+    sed -i 's/Enabled: no/Enabled: yes/' /etc/apt/sources.list.d/nitrux.sources
+fi
+
+
+# -- Updated package index.
+
+[ -f /etc/apt/sources.list ] && rm -f /etc/apt/sources.list
+
+update
+
+
+# -- Upgrade rootfs packages.
+
+upgrade

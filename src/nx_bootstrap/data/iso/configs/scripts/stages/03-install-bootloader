@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2023-2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+set -eu
+
+# -- Source APT commands as functions.
+# shellcheck source=/dev/null
+
+source /configs/scripts/others/apt-funcs
+
+
+# -- Add bootloader.
+
+INSTALL_GRUB2_PKGS=(
+    grub-efi-amd64
+    grub-efi-amd64-signed
+)
+
+install "${INSTALL_GRUB2_PKGS[@]}"
+
+
+# -- Add packages for Secure Boot compatibility.
+
+INSTALL_SECURE_BOOT_SHIM_PKGS=(
+    mokutil
+    sbsigntool
+    shim-helpers-amd64-signed
+    shim-signed
+)
+
+install "${INSTALL_SECURE_BOOT_SHIM_PKGS[@]}"

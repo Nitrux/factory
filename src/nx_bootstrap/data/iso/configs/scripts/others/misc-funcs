@@ -1,0 +1,339 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2023-2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+
+# -- Exit on errors.
+
+set -eu
+
+
+# -- Functions.
+
+update_console_settings() {
+    local key="$1"
+    local value="$2"
+    local config_file="/etc/default/console-setup"
+
+    value_escaped=$(printf '%s\n' "$value" | sed 's/[\/&]/\\&/g')
+
+    if grep -qE "^#?\s*${key}=" "$config_file" 2>/dev/null; then
+        sed -i "s|^#\?\s*${key}=.*|${key}=\"${value_escaped}\"|" "$config_file"
+    else
+        echo "${key}=\"${value}\"" >> "$config_file"
+    fi
+}
+
+
+check_ownership() {
+  echo -e "\nChecking ownership of files..."
+  for FILE_TO_CHECK in "$@"; do
+    if [ -e "$FILE_TO_CHECK" ]; then
+      local owner
+      local group
+      owner=$(stat -c "%U" "$FILE_TO_CHECK")
+      group=$(stat -c "%G" "$FILE_TO_CHECK")
+      echo "The file '$FILE_TO_CHECK' is owned by: $owner (Group: $group)"
+    else
+      echo "File '$FILE_TO_CHECK' does not exist."
+    fi
+  done
+}
+
+check_file_contents() {
+  echo -e "\nChecking contents of files..."
+  for FILE in "$@"; do
+    if [ -f "$FILE" ]; then
+      echo -e "\nContents of $FILE:"
+      echo "=========================="
+      cat "$FILE"
+      echo "=========================="
+    else
+      echo "Error: File '$FILE' not found."
+    fi
+  done
+}
+
+check_files() {
+  local FILES=("$@")
+  echo -e "\nChecking existence of files..."
+  for FILE in "${FILES[@]}"; do
+    if [ -e "$FILE" ]; then
+      echo "File $FILE exists."
+    else
+      echo "File $FILE does not exist."
+    fi
+  done
+}
+
+check_symlinks() {
+  local LINKS=("$@")
+  echo -e "\nChecking symbolic link targets..."
+  for LINK in "${LINKS[@]}"; do
+    local TARGET
+    TARGET=$(readlink -f "$LINK" || true)
+    if [ -n "$TARGET" ]; then
+      echo "Link $LINK points to: $TARGET"
+    else
+      echo "Link $LINK does not exist or is not a symbolic link."
+    fi
+  done
+}
+
+check_directories() {
+  local DIRECTORIES=("$@")
+  echo -e "\nChecking existence of directories..."
+  if ! command -v tree &> /dev/null; then
+    echo "Error: 'tree' command not found. Please install 'tree' to list directory contents."
+    return 1
+  fi
+  for DIRECTORY in "${DIRECTORIES[@]}"; do
+    if [ -d "$DIRECTORY" ]; then
+      echo "Directory $DIRECTORY exists. Contents:"
+      tree -L 2 "$DIRECTORY"
+    else
+      echo "Directory $DIRECTORY does not exist."
+    fi
+  done
+}
+
+check_initramfs_size() {
+  local INITRAMFS_FILE
+
+  INITRAMFS_FILE=$(find /boot -maxdepth 1 -name "initrd.img-*" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+
+  if [ -f "$INITRAMFS_FILE" ]; then
+    echo -e "\n"
+    echo "Initramfs file: $INITRAMFS_FILE"
+    echo "Initramfs size (actual disk usage):"
+    
+    du -h --apparent-size "$INITRAMFS_FILE" | awk '{print $1}'
+
+    echo "15 largest files in initramfs:"
+    lsinitramfs -l "$INITRAMFS_FILE" | sort -rh -k5 | head -n 15 | awk '{printf "%.1fM %s %s\n", $5/1024/1024, $3, $NF}'
+  else
+    echo "Error: Initramfs file '$INITRAMFS_FILE' not found inside chroot."
+    echo "Available initramfs images in /boot:"
+    ls -lh /boot/initrd.img-* 2>/dev/null || echo "No initramfs images found."
+  fi
+}
+
+search_initramfs_for() {
+  local PATTERN INITRAMFS_FILE
+
+  if [ -z "$1" ]; then
+    echo "Usage: search_initramfs_for <pattern>"
+    echo "Example: search_initramfs_for plymouth"
+    return 1
+  fi
+
+  PATTERN="$1"
+
+  INITRAMFS_FILE=$(find /boot -maxdepth 1 -name "initrd.img-*" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)
+
+  if [ ! -f "$INITRAMFS_FILE" ]; then
+    echo "Error: Could not find initramfs image in /boot."
+    return 1
+  fi
+
+  echo -e "\nSearching for '$PATTERN' in $INITRAMFS_FILE..."
+  echo
+
+  lsinitramfs "$INITRAMFS_FILE" | grep -Ei "$PATTERN" || echo "No matches found."
+}
+
+create_symlink() {
+    local source="$1"
+    local destination="$2"
+
+    ln -svf "$source" "$destination"
+}
+
+check_live_user_password() {
+    entry="$(getent shadow nitrux || true)"
+    [ -z "$entry" ] && return 1
+    hash_field="$(printf '%s\n' "$entry" | cut -d: -f2)"
+    [ -z "$hash_field" ] && return 1
+    [ "$hash_field" = "!" ] && return 1
+    [ "$hash_field" = "*" ] && return 1
+    return 0
+}
+
+install_vicinae_latest() {
+    set -euo pipefail
+
+    local repo="vicinaehq/vicinae"
+    local prefix="${1:-/usr/local}"
+    local binary_name="vicinae"
+    local install_dir="$prefix/lib/vicinae"
+    local bin_dir="$prefix/bin"
+    local themes_dir="$prefix/share/vicinae/themes"
+    local applications_dir="$prefix/share/applications"
+
+    local workdir
+    local api_url
+    local response
+    local version
+    local machine_arch
+    local appimage_count
+    local asset
+    local appimage_path
+    local extract_dir
+    local src_root
+    local binary_path
+    local extracted=0
+
+    for cmd in curl jq unsquashfs grep cut head find sed chmod mkdir rm mv cp ln mktemp; do
+        command -v "$cmd" >/dev/null 2>&1 || {
+            printf 'Missing required command: %s\n' "$cmd" >&2
+            return 1
+        }
+    done
+
+    workdir="$(mktemp -d /tmp/vicinae.XXXXXX)"
+    appimage_path="$workdir/Vicinae.AppImage"
+    extract_dir="$workdir/extract"
+
+    trap 'rm -rf "$workdir"' RETURN
+
+    api_url="https://api.github.com/repos/$repo/releases/latest"
+    response="$(curl -fsSL "$api_url")"
+
+    version="$(printf '%s\n' "$response" | jq -r '.tag_name')"
+    machine_arch="$(uname -m)"
+    appimage_count="$(printf '%s\n' "$response" | jq -r '.assets[].name | select(test("AppImage"; "i"))' | awk 'NF { count++ } END { print count + 0 }')"
+
+    [[ -n "$version" && "$version" != "null" ]] || {
+        echo "Failed to determine latest Vicinae version" >&2
+        return 1
+    }
+
+    case "$machine_arch" in
+        x86_64|amd64)
+            asset="$(printf '%s\n' "$response" | jq -r '.assets[].name | select(test("AppImage"; "i")) | select(test("(x86_64|amd64)"; "i"))' | head -n1)"
+            ;;
+        aarch64|arm64)
+            asset="$(printf '%s\n' "$response" | jq -r '.assets[].name | select(test("AppImage"; "i")) | select(test("(aarch64|arm64)"; "i"))' | head -n1)"
+            ;;
+        armv7l|armv7*)
+            asset="$(printf '%s\n' "$response" | jq -r '.assets[].name | select(test("AppImage"; "i")) | select(test("(armv7|armhf)"; "i"))' | head -n1)"
+            ;;
+        i386|i686)
+            asset="$(printf '%s\n' "$response" | jq -r '.assets[].name | select(test("AppImage"; "i")) | select(test("(i386|i686)"; "i"))' | head -n1)"
+            ;;
+        *)
+            asset=""
+            ;;
+    esac
+
+    if [[ -z "$asset" || "$asset" == "null" ]]; then
+        if [[ "$appimage_count" -eq 1 ]]; then
+            asset="$(printf '%s\n' "$response" | jq -r '.assets[].name | select(test("AppImage"; "i"))' | head -n1)"
+        else
+            echo "Failed to find Vicinae AppImage asset for architecture $machine_arch" >&2
+            return 1
+        fi
+    fi
+
+    curl -fL "https://github.com/$repo/releases/download/$version/$asset" -o "$appimage_path"
+    chmod 0755 "$appimage_path"
+
+    mkdir -p "$extract_dir"
+
+    if unsquashfs -f -d "$extract_dir" "$appimage_path" >/dev/null 2>&1; then
+        extracted=1
+    else
+        rm -rf "$extract_dir"
+        mkdir -p "$extract_dir"
+
+        while IFS=: read -r offset _; do
+            [[ -n "$offset" ]] || continue
+
+            rm -rf "$extract_dir"
+            mkdir -p "$extract_dir"
+
+            if unsquashfs -o "$offset" -f -d "$extract_dir" "$appimage_path" >/dev/null 2>&1; then
+                extracted=1
+                break
+            fi
+        done < <(grep -abo 'hsqs' "$appimage_path")
+    fi
+
+    [[ "$extracted" -eq 1 ]] || {
+        echo "Failed to extract Vicinae AppImage without executing it" >&2
+        return 1
+    }
+
+    if [[ -d "$extract_dir/squashfs-root" ]]; then
+        src_root="$extract_dir/squashfs-root"
+    else
+        src_root="$extract_dir"
+    fi
+
+    rm -rf "$install_dir"
+    mkdir -p "$prefix/lib" "$bin_dir" "$applications_dir"
+    mv "$src_root" "$install_dir"
+
+    if [[ -x "$install_dir/usr/bin/$binary_name" ]]; then
+        binary_path="$install_dir/usr/bin/$binary_name"
+    elif [[ -x "$install_dir/AppRun" ]]; then
+        binary_path="$install_dir/AppRun"
+    else
+        echo "Failed to locate Vicinae executable after extraction" >&2
+        return 1
+    fi
+
+    ln -sf "$binary_path" "$bin_dir/$binary_name"
+
+    if [[ -x "$install_dir/usr/bin/node" ]]; then
+        ln -sf "$install_dir/usr/bin/node" "$bin_dir/vicinae-node"
+    fi
+
+    if [[ -d "$install_dir/usr/share/vicinae/themes" ]]; then
+        rm -rf "$themes_dir"
+        mkdir -p "$themes_dir"
+        cp -a "$install_dir/usr/share/vicinae/themes"/. "$themes_dir"/
+    fi
+
+    if [[ -d "$install_dir/usr/share/applications" ]]; then
+        find "$install_dir/usr/share/applications" -maxdepth 1 -type f -name 'vicinae*.desktop' -exec cp -f {} "$applications_dir"/ \;
+
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database "$applications_dir" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if [[ -d "$install_dir/usr/share/vicinae/native-messaging-hosts" ]]; then
+        local templates_dir="$install_dir/usr/share/vicinae/native-messaging-hosts"
+        local native_host_bin="$install_dir/usr/libexec/vicinae/vicinae-browser-link"
+        local chrome_extension_id="com.vicinae.vicinae"
+
+        if [[ -f "$templates_dir/com.vicinae.vicinae.chromium.json.in" ]]; then
+            mkdir -p /etc/chromium/native-messaging-hosts
+            sed -e "s|@NATIVE_HOST_BIN@|$native_host_bin|g" \
+                -e "s|@CHROME_EXTENSION_ID@|$chrome_extension_id|g" \
+                "$templates_dir/com.vicinae.vicinae.chromium.json.in" \
+                > /etc/chromium/native-messaging-hosts/com.vicinae.vicinae.json
+        fi
+
+        if [[ -f "$templates_dir/com.vicinae.vicinae.firefox.json.in" ]]; then
+            mkdir -p /usr/lib/mozilla/native-messaging-hosts
+            sed -e "s|@NATIVE_HOST_BIN@|$native_host_bin|g" \
+                "$templates_dir/com.vicinae.vicinae.firefox.json.in" \
+                > /usr/lib/mozilla/native-messaging-hosts/com.vicinae.vicinae.json
+        fi
+    fi
+
+    if [[ -d "$install_dir/usr/lib/udev/rules.d" ]]; then
+        mkdir -p "$prefix/lib/udev/rules.d"
+        cp -a "$install_dir/usr/lib/udev/rules.d"/. "$prefix/lib/udev/rules.d"/
+    fi
+
+    if [[ -d "$install_dir/usr/lib/modules-load.d" ]]; then
+        mkdir -p "$prefix/lib/modules-load.d"
+        cp -a "$install_dir/usr/lib/modules-load.d"/. "$prefix/lib/modules-load.d"/
+    fi
+
+    printf 'Installed Vicinae %s to %s\n' "$version" "$prefix"
+}

@@ -1,0 +1,360 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2023-2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+set -eu
+
+# -- Source useful functions.
+# shellcheck source=/dev/null
+
+source /configs/scripts/others/misc-funcs
+
+
+# -- Remove these lines from /usr/share/initramfs-tools/scripts/casper because they're relevant in Ubuntu but not here.
+
+sed -i '/touch \/root\/var\/crash\/crash.init/d; /rm \/root\/var\/crash\/crash.init/d' /usr/share/initramfs-tools/scripts/casper
+
+
+# -- Check if the root account is disabled, if not, disable it by locking it.
+
+if [[ $(passwd -S root | awk '{print $2}') == "L" ]]; then
+   echo "Root account is already disabled"
+else
+   passwd -l root
+   echo "Root account has been disabled"
+fi
+
+
+# -- Edit console-setup to match the user settings.
+
+update_console_settings ACTIVE_CONSOLES '/dev/tty[1-6]'
+update_console_settings CHARMAP 'UTF-8'
+update_console_settings VIDEOMODE ''
+update_console_settings CODESET 'Uni2'
+update_console_settings FONTFACE 'Terminus'
+update_console_settings FONTSIZE '16'
+
+
+# -- Regenerate console-setup cache after changing defaults so TTY settings are ready on first boot without running setupcon manually.
+
+if command -v setupcon >/dev/null 2>&1; then
+    setupcon --save-only || setupcon --save || true
+fi
+
+
+# -- Ensure the Hyprland *user* session is launched with D-Bus (OpenRC) from the greeter when using greetd.
+#    -- See: https://wiki.gentoo.org/wiki/Greetd#Hyprland_session_with_D-Bus_.28OpenRC.29
+# -- Use nwsm to launch the user session.
+
+DESKTOP_FILE="/usr/share/wayland-sessions/hyprland.desktop"
+NWSM_EXEC='Exec=/usr/bin/env NWSM_REQUIRED_VARS=HYPRLAND_INSTANCE_SIGNATURE /usr/bin/nwsm -- /usr/bin/start-hyprland'
+
+if [ -f "$DESKTOP_FILE" ] && ! grep -Fxq "$NWSM_EXEC" "$DESKTOP_FILE"; then
+    sed -i \
+        -e "s|^Exec=/usr/bin/start-hyprland$|$NWSM_EXEC|" \
+        -e "s|^Exec=greetd-hyprland.*$|$NWSM_EXEC|" \
+        -e "s|^Exec=start-hyprland$|$NWSM_EXEC|" \
+        -e "s|^Exec=Hyprland$|$NWSM_EXEC|" \
+        "$DESKTOP_FILE"
+fi
+
+
+# -- Remove the uwsm-managed Hyprland session because 1) we don't ship uwsm and 2) uwsm does not work without systemd.
+
+rm -f /usr/share/wayland-sessions/hyprland-uwsm.desktop
+
+
+# -- Remove CLI utilities launchers.
+#    -- Why the hell do CLI utilities have a god damn desktop launcher to begin with?!
+
+DELETE_CLI_UTILS_LAUNCHERS=(
+    htop.desktop
+    lstopo.desktop
+    micro.desktop
+)
+
+rm -f "${DELETE_CLI_UTILS_LAUNCHERS[@]/#//usr/share/applications/}" || true
+
+
+# -- Create directories for aesthethic FHS.
+
+BASE_DIR="/System"
+
+declare -a DIRS=(
+    "${BASE_DIR}/Boot"
+    "${BASE_DIR}/Binaries/Administrative"
+    "${BASE_DIR}/Binaries/Standard"
+    "${BASE_DIR}/Binaries/Optional"
+    "${BASE_DIR}/Configuration"
+    "${BASE_DIR}/Devices"
+    "${BASE_DIR}/Filesystems/External"
+    "${BASE_DIR}/Filesystems/Internal"
+    "${BASE_DIR}/Libraries"
+    "${BASE_DIR}/Shareable"
+    "${BASE_DIR}/Variable"
+    "/Users"
+)
+
+for dir in "${DIRS[@]}"; do
+    echo "Creating directory: $dir"
+    mkdir -p "$dir" || echo "Failed to create $dir"
+done
+
+
+# -- Hide original FHS directories.
+
+cp /configs/files/other/hidden /.hidden
+
+
+# -- Create /Applications directory.
+
+mkdir -p /Applications
+
+
+# -- Configure Bluez for better security and connectivity.
+# -- Also, disable the god dammned Headset / Hands-Free HF role and Hands-Free Audio Gateway.
+
+MAIN_CONF="/etc/bluetooth/main.conf"
+INPUT_CONF="/etc/bluetooth/input.conf"
+
+if [ -f "$MAIN_CONF" ]; then
+    sed -i \
+        -e 's/^[# ]*DiscoverableTimeout *=.*/DiscoverableTimeout = 120/' \
+        -e 's/^[# ]*PairableTimeout *=.*/PairableTimeout = 0/' \
+        -e 's/^[# ]*ControllerMode *=.*/ControllerMode = dual/' \
+        -e 's/^[# ]*AutoEnable *=.*/AutoEnable=true/' \
+        -e 's/^[# ]*Privacy *=.*/Privacy = network/' \
+        -e 's/^[# ]*JustWorksRepairing *=.*/JustWorksRepairing = confirm/' \
+        -e 's/^[# ]*SecureConnections *=.*/SecureConnections = on/' \
+        -e 's/^[# ]*FastConnectable *=.*/FastConnectable = true/' \
+        "$MAIN_CONF"
+
+    sed -i \
+        -e '/^# Disable Headset \/ Hands-Free HF role\./d' \
+        -e '/^Disable=Headset$/d' \
+        -e '/^# Disable Hands-Free Audio Gateway\./d' \
+        -e '/^Disable=Gateway$/d' \
+        "$MAIN_CONF"
+
+    awk '
+        /^\[General\]/ {
+            print
+            if (!inserted) {
+                print ""
+                print "# Disable Headset / Hands-Free HF role."
+                print "Disable=Headset"
+                print ""
+                print "# Disable Hands-Free Audio Gateway."
+                print "Disable=Gateway"
+                inserted = 1
+            }
+            next
+        }
+        { print }
+    ' "$MAIN_CONF" > "${MAIN_CONF}.tmp" && mv "${MAIN_CONF}.tmp" "$MAIN_CONF"
+fi
+
+if [ -f "$INPUT_CONF" ]; then
+    sed -i \
+        -e 's/^[# ]*IdleTimeout *=.*/IdleTimeout=1800/' \
+        -e 's/^[# ]*UserspaceHID *=.*/UserspaceHID=true/' \
+        -e 's/^[# ]*ClassicBondedOnly *=.*/ClassicBondedOnly=true/' \
+        -e 's/^[# ]*LEAutoSecurity *=.*/LEAutoSecurity=true/' \
+        "$INPUT_CONF"
+fi
+
+
+# -- Install NX AppHub and NX AppHub Daemon to a system-wide venv.
+
+pipx install --global git+https://github.com/Nitrux/nx-apphub.git
+pipx install --global git+https://github.com/Nitrux/nx-apphubd.git
+
+
+# -- Replace user-setup-apply so that it shuts up about dpkg.
+
+mkdir -p /usr/lib/user-setup/
+
+cp /configs/files/other/user-setup-apply /usr/lib/user-setup/user-setup-apply
+
+
+# -- Replace update-grub with our version that doesn't break *OUR* distribution.
+
+cp /configs/files/grub_files/update-grub /usr/sbin/update-grub
+
+
+# -- Replace /usr/lib/grub/grub-sort-version with a version that doesn't use apt.pkg so it can generate a usable boot menu.
+
+cp /configs/files/grub_files/grub-sort-version /usr/lib/grub/grub-sort-version
+
+
+# -- Add our dnscrypt-proxy configuration.
+
+cp /configs/files/dnscrypt-proxy_files/* /etc/dnscrypt-proxy/
+
+
+# -- VirtualBox workaround for KVM.
+#    -- Keep this opt-in because disabling virtualization extensions at load
+#       time breaks KVM-first workloads such as GNOME Boxes/libvirt.
+#    -- Set ENABLE_VIRTUALBOX_KVM_WORKAROUND=1 at build time if needed.
+
+if [ "${ENABLE_VIRTUALBOX_KVM_WORKAROUND:-0}" = "1" ]; then
+    if [ ! -f /etc/modprobe.d/kvm.conf ]; then
+        touch /etc/modprobe.d/kvm.conf
+    fi
+
+    if ! grep -q "^options kvm enable_virt_at_load=0$" /etc/modprobe.d/kvm.conf; then
+        if grep -q "^options kvm " /etc/modprobe.d/kvm.conf; then
+            sed -i "/^options kvm /a options kvm enable_virt_at_load=0" /etc/modprobe.d/kvm.conf
+        else
+            printf '%s\n' 'options kvm enable_virt_at_load=0' >> /etc/modprobe.d/kvm.conf
+        fi
+    fi
+fi
+
+
+# -- Enforce sync only for specific filesystems, like vfat.
+
+sed -i '/^\[defaults\]/a\vfat_defaults=sync' /etc/udisks2/udisks2.conf
+
+
+# -- Disable AppArmor profile for bubblewrap that breaks Flatpak, see https://bugs.launchpad.net/ubuntu/+source/apparmor/+bug/2072811
+
+ln -s /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/disable/
+
+
+# -- Rename the existing AppArmor profile for Firejail so it actually works.
+
+mv /etc/apparmor.d/firejail-default /etc/apparmor.d/usr.bin.firejail
+
+
+# -- Create directory for os-prober.
+
+mkdir -p /var/lib/os-prober/mount
+
+
+# -- Replace this line in mkinitramfs so it shuts up about dpkg.
+
+sed -i "s+DPKG_ARCH=\$(dpkg --print-architecture)+DPKG_ARCH=\$(uname -m | sed \"s/x86_64/amd64/\")+g" /usr/sbin/mkinitramfs
+
+
+# -- Ensure the links in / point to the files in /boot.
+
+boot_dir="/boot"
+vmlinuz_pattern="vmlinuz-*nitrux-*"
+initrd_pattern="initrd.img-*nitrux-*"
+
+vmlinuz_file=$(find "$boot_dir" -maxdepth 1 -type f -name "$vmlinuz_pattern" | head -1)
+initrd_file=$(find "$boot_dir" -maxdepth 1 -type f -name "$initrd_pattern" | head -1)
+
+if [ -n "$vmlinuz_file" ]; then
+    echo "Creating/updating symlink for /vmlinuz"
+    create_symlink "$vmlinuz_file" "/vmlinuz"
+else
+    echo "Error: No matching vmlinuz file found in $boot_dir."
+fi
+
+if [ -n "$initrd_file" ]; then
+    echo "Creating/updating symlink for /initrd.img"
+    create_symlink "$initrd_file" "/initrd.img"
+else
+    echo "Error: No matching initrd.img file found in $boot_dir."
+fi
+
+
+# -- Remove rootfs leftovers
+
+rm -f /var/log/bootstrap.log || true
+
+
+# -- Add modules to load at boot time.
+
+printf '%s\n' amdgpu i915 fuse exfat loop uinput ntsync uvcvideo uhid >> /etc/modules-load.d/load-modules-at-boot.conf
+
+if [ "${ISO_BRANCH:-mesa}" = "nvopen" ]; then
+    printf '%s\n' nvidia nvidia_modeset nvidia_uvm nvidia_drm >> /etc/modules-load.d/load-modules-at-boot.conf
+fi
+
+
+# -- Remove KWallet Manager desktop launcher since the intention is to use the KCM.
+
+rm -f /usr/share/applications/org.kde.kwalletmanager.desktop || true
+
+
+# -- Add the path to the read-only mount point to safe-rm.
+
+echo "/media/root-ro" | tee -a /etc/safe-rm.conf > /dev/null
+
+
+# -- Add Flathub as system remote.
+
+flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+
+# -- Remove broken firmware for the Realtek RTL8852CE.
+# -- The firmware for this wireless chip is documented to be broken since version 0.27.122.0.
+#   -- See this Fedora forum thread: https://discussion.fedoraproject.org/t/bluetooth-audio-stuttering-during-wifi-activity-on-rtl8852ce/142165/24
+
+if [ -f "/usr/lib/firmware/rtw89/rtw8852c_fw.bin" ]; then
+    rm -f /usr/lib/firmware/rtw89/{rtw8852c_fw-1.bin,rtw8852c_fw-2.bin} || true
+    ln -sv rtw8852c_fw.bin /usr/lib/firmware/rtw89/rtw8852c_fw-1.bin
+    ln -sv rtw8852c_fw.bin /usr/lib/firmware/rtw89/rtw8852c_fw-2.bin
+fi
+
+
+# -- Use a wrapper script, so that any Calamares/KPMcore call to mkfs.f2fs will always have the compression and fscrypt features enabled on the created filesystem.
+
+MKFS_F2FS_BIN="$(command -v mkfs.f2fs || echo /usr/sbin/mkfs.f2fs)"
+if [ ! -x "$MKFS_F2FS_BIN" ]; then
+    echo "mkfs.f2fs not found or not executable at $MKFS_F2FS_BIN" >&2
+    exit 1
+fi
+
+REAL_BIN="${MKFS_F2FS_BIN}.real"
+
+if [ ! -x "$REAL_BIN" ]; then
+    mv "$MKFS_F2FS_BIN" "$REAL_BIN"
+fi
+
+cat >"$MKFS_F2FS_BIN" <<EOF
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+
+# -- Exit on errors.
+
+set -euo pipefail
+
+
+# -- Ensure compression and fscrypt are used when creating the filesystem.
+
+exec "$REAL_BIN" -O extra_attr,inode_checksum,sb_checksum,compression,encrypt "\$@"
+EOF
+
+chmod 0755 "$MKFS_F2FS_BIN"
+
+
+# -- Remove NetworkManager ifupdown dispatch script as we don't use it; disabling it is not enough.
+
+rm -f /etc/NetworkManager/dispatcher.d/01-ifupdown || true
+
+
+# -- Add Vicinae to replace Wofi. 
+#   -- Vicinae is available as an AppImage, but it seems the official way to "install it" is to use the install script, which extracts the AppImage(?).
+#   -- However, that will fail because the script is trying to execute the AppImage inside the chroot.
+
+install_vicinae_latest /usr/local
+
+
+# -- Pre-generate the fontconfig cache.
+
+fc-cache -f -v
+
+
+# -- Mitigation against CIFSwitch.
+
+cat >/etc/request-key.d/cifs.spnego.conf <<'EOF'
+create cifs.spnego * * /usr/sbin/keyctl negate %k 30 %S
+EOF

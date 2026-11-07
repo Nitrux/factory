@@ -1,0 +1,46 @@
+buildinfo:
+  rootfs: build/rootfs
+  archive: build/rootfs.tar.xz
+  compression: xz
+  compression_level: 9
+  distrorepo:
+    - name: nitrux-rootfs
+      url: https://packagecloud.io/nitrux/rootfs/debian
+      release: duke
+      arch: amd64
+      components: [main]
+      key_url: https://packagecloud.io/nitrux/rootfs/gpgkey
+    - name: nitrux-testing
+      url: https://packagecloud.io/nitrux/testing/debian
+      release: duke
+      arch: amd64
+      components: [main]
+      key_url: https://packagecloud.io/nitrux/testing/gpgkey
+    - name: nitrux-area51
+      url: https://packagecloud.io/nitrux/area51/debian
+      release: duke
+      arch: amd64
+      components: [main]
+      key_url: https://packagecloud.io/nitrux/area51/gpgkey
+    - name: nitrux-skidrow
+      url: https://packagecloud.io/nitrux/skidrow/debian
+      release: duke
+      arch: amd64
+      components: [main]
+      key_url: https://packagecloud.io/nitrux/skidrow/gpgkey
+base:
+  - apt-transport-https
+  - axel
+  - ca-certificates
+  - ca-certificates-java
+  - curl
+  - dirmngr
+  - git
+  - gnupg2
+  - less
+  - libzstd-dev
+  - lz4
+  - zstd
+exclude:
+  - libsystemd0
+  - systemd-sysv

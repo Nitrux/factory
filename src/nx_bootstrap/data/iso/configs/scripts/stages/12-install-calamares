@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2023-2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+set -eu
+
+# -- Source APT commands as functions.
+# shellcheck source=/dev/null
+
+source /configs/scripts/others/apt-funcs
+
+
+# -- Install Calamares.
+#    -- For whatever absurd reason, Calamares built against Qt6 (stable, testing, unstable) is unable to receive input on the text fields when using the QML modules, regardless of the QML files using vanilla QML or Kirigami, or MauiKit.
+#    -- With that said, there are only two options: 
+#       -- a) Use the settings package using QWidgets for the UI (Calamares' default; simpler setup, but barebones, no customization beyond changing some images and colors), or 
+#       -- b) Use a Calamares package built against Qt5 up to 3.3.9 (which is what I tested) and continue using the QML settings package (full module customization except for the partition module; requires Qt5 packages, which can—and will—cause a dependency conflict).
+
+CALAMARES_PKGS=(
+    calamares
+    calamares-settings-nitrux
+    dosfstools
+    efibootmgr
+    python3-toml
+    rsync
+    squashfs-tools
+)
+
+install "${CALAMARES_PKGS[@]}"

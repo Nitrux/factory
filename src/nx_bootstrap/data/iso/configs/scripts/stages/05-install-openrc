@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2023-2025 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
+
+set -eu
+
+# -- Source APT commands as functions.
+# shellcheck source=/dev/null
+
+source /configs/scripts/others/apt-funcs
+
+
+# -- Delete these SysV scripts, otherwise they cause conflicts when updating the service dependencies.
+#    -- OpenRC explicitly disallows a service from being both:
+#       -- A real service (defined by /etc/init.d/<name>)
+#       -- And providing a virtual service of the same name (via provide <name>)
+
+DELETE_SYSV_SCRIPTS=(
+    acpi-support
+    acpid
+    alsa-utils
+    apparmor
+    blk-availability
+    bluetooth
+    cgroupfs-mount
+    console-setup.sh
+    cron
+    cryptdisks
+    cryptdisks-early
+    dbus
+    dnsmasq
+    docker
+    elogind
+    eudev
+    fprintd
+    greetd
+    keyboard-setup.sh
+    lm-sensors
+    lvm2-lockd
+    lvm2-locks
+    lvm2-lvmpolld
+    lvm2-monitor
+    multipath-tools
+    network-manager
+    networking
+    nohang
+    ntpsec
+    openvpn
+    plymouth
+    plymouth-log
+    procps
+    pulseaudio-enable-autospawn
+    rc
+    rcS
+    rngd
+    rsyslog
+    selinux-autorelabel
+    sudo
+    user
+    uuidd
+    x11-common
+)
+
+rm -f "${DELETE_SYSV_SCRIPTS[@]/#//etc/init.d/}" || true
+
+
+# -- Add Debian-flavored OpenRC to use it as the init system. Ensure /run/openrc exists before installing the package, because apparently it doesn't sometimes.
+
+mkdir -p /run/openrc
+
+INSTALL_OPENRC_PKGS=(
+    openrc
+)
+
+install "${INSTALL_OPENRC_PKGS[@]}"

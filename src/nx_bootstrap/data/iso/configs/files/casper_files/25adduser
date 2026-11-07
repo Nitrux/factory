@@ -1,0 +1,30 @@
+#!/bin/sh
+
+PREREQ=""
+DESCRIPTION="Preparing live session..."
+
+prereqs()
+{
+       echo "$PREREQ"
+}
+
+case $1 in
+prereqs)
+       prereqs
+       exit 0
+       ;;
+esac
+
+# shellcheck source=/dev/null
+. /scripts/casper-functions
+
+log_begin_msg "$DESCRIPTION"
+
+if [ -d /root/etc/sudoers.d ]; then
+    umask 077
+    printf 'nitrux ALL=(ALL) NOPASSWD: ALL\n' \
+        > /root/etc/sudoers.d/calamares
+    chmod 0440 /root/etc/sudoers.d/calamares
+fi
+
+log_end_msg

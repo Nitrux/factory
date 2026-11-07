@@ -1,0 +1,128 @@
+name: Factory rootfs release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: GitHub Release tag for the rootfs archive
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  rootfs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Factory and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential ca-certificates python3-apt python3-venv ruby-dev ruby-full xz-utils
+          sudo gem install --no-document package_cloud
+          python3 -m venv --system-site-packages .venv
+          .venv/bin/pip install .
+
+      - name: Verify the installed CLI and APT worker
+        run: |
+          .venv/bin/factory --help
+          .venv/bin/factory build --help
+          .venv/bin/factory snapshot --help
+          PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
+
+      - name: Download selected Debian packages
+        run: |
+          .venv/bin/factory snapshot configs/snapshot/rootfs-packages-amd64.yml
+          .venv/bin/factory snapshot configs/snapshot/rootfs-packages-arm64.yml
+
+      - name: Yank packages already published to Packagecloud
+        env:
+          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+        run: |
+          .venv/bin/python - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          import requests
+
+          token = os.environ["PACKAGECLOUD_TOKEN"]
+          if not token:
+              raise SystemExit("PACKAGECLOUD_TOKEN is not set")
+
+          local_packages = {
+              path.name
+              for directory in ("seeds/rootfs/amd64", "seeds/rootfs/arm64")
+              for path in Path(directory).glob("*.deb")
+          }
+          url = "https://packagecloud.io/api/v1/repos/nitrux/rootfs/packages.json"
+          params = {"per_page": 100}
+          existing_packages = set()
+          while url:
+              response = requests.get(url, auth=(token, ""), params=params, timeout=30)
+              response.raise_for_status()
+              for package in response.json():
+                  if package.get("type") == "deb" and package.get("distro_version") == "debian/duke":
+                      existing_packages.add(package.get("filename"))
+              url = response.links.get("next", {}).get("url")
+              params = None
+
+          target = "nitrux/rootfs/debian/duke"
+          for filename in sorted(local_packages & existing_packages):
+              subprocess.run(["package_cloud", "yank", target, filename], check=True, timeout=120)
+          PY
+
+      - name: Publish selected packages to Packagecloud
+        env:
+          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+        run: |
+          declare -A seen
+          packages=()
+          for package in seeds/rootfs/amd64/*.deb seeds/rootfs/arm64/*.deb; do
+            [[ -f "$package" ]] || continue
+            filename="${package##*/}"
+            if [[ -z "${seen[$filename]+x}" ]]; then
+              seen[$filename]=1
+              packages+=("$package")
+            fi
+          done
+          if [[ ${#packages[@]} -eq 0 ]]; then
+            echo "No packages were downloaded."
+            exit 1
+          fi
+          package_cloud push nitrux/rootfs/debian/duke "${packages[@]}"
+
+      - name: Build rootfs archive
+        run: |
+          sudo .venv/bin/factory build --rfs configs/nitrux-rootfs.yml
+          sudo chown "$(id -u):$(id -g)" build
+
+      - name: Check rootfs size and create checksum
+        id: rootfs
+        run: |
+          archive="build/rootfs.tar.xz"
+          test -f "$archive"
+          size=$(stat -c %s "$archive")
+          if (( size >= 2147483648 )); then
+            echo "Rootfs archive must be smaller than GitHub's 2 GiB per-asset limit."
+            exit 1
+          fi
+          sha256sum "$archive" | awk '{print $1}' > "$archive.sha256"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Publish rootfs Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "${{ steps.rootfs.outputs.archive }}" \
+            "${{ steps.rootfs.outputs.archive }}.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "Nitrux rootfs $RELEASE_TAG" \
+            --notes "Rootfs archive built by Factory from configs/nitrux-rootfs.yml."

@@ -29,6 +29,7 @@ For more in-depth information about Factory, please see the [Wiki](https://githu
 ```
 python3-apt
 mount
+squashfs-tools
 tar
 ```
 

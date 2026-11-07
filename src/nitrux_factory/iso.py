@@ -179,10 +179,17 @@ def build_iso(config_path: Path) -> dict[str, Path]:
     rootfs_kind, rootfs_path, rootfs_checksum = _rootfs_config(config.get("rootfs"), config_dir)
     data_dir = _iso_data_dir(config.get("data_dir"), config_dir)
     stages = _iso_stages(config.get("stages"), data_dir)
-    flavor = config.get("flavor", "mesa")
-    if flavor not in ("mesa", "nvopen"):
-        raise ValueError("iso.flavor must be 'mesa' or 'nvopen'")
-    label = config.get("volume_label", "NITRUX")
+    theme_value = config.get("grub_theme")
+    if not isinstance(theme_value, str) or not theme_value.strip():
+        raise ValueError("iso.grub_theme must specify a GRUB theme directory")
+    grub_theme = Path(theme_value).expanduser()
+    if not grub_theme.is_absolute():
+        grub_theme = data_dir / grub_theme
+    grub_theme = grub_theme.resolve()
+    if not grub_theme.is_dir():
+        raise FileNotFoundError(f"GRUB theme directory does not exist: {grub_theme}")
+
+    label = config.get("volume_label", "SYSTEM")
     if not isinstance(label, str) or not label or len(label) > 32:
         raise ValueError("iso.volume_label must contain 1 to 32 characters")
     squashfs = config.get("squashfs", {})
@@ -219,7 +226,7 @@ def build_iso(config_path: Path) -> dict[str, Path]:
     if not isinstance(output_value, str) or not output_value.strip():
         raise ValueError("iso.output_dir must be a directory path")
     output_dir = _resolve_path(output_value, config_dir)
-    image_name = config.get("image", f"nitrux-{flavor}-amd64.iso")
+    image_name = config.get("image", "system.iso")
     if not isinstance(image_name, str) or Path(image_name).name != image_name or not image_name.endswith(".iso"):
         raise ValueError("iso.image must be a filename ending in .iso")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -303,9 +310,6 @@ def build_iso(config_path: Path) -> dict[str, Path]:
 
         env = os.environ.copy()
         env["PATH"] = f"{tooling_dir}:{env.get('PATH', '')}"
-        env["ISO_BRANCH"] = flavor
-        iso_flavor = "ISO_BRANCH=nvopen" if flavor == "nvopen" else "ISO_BRANCH=mesa"
-        (root_dir / "etc/iso-release").write_text(iso_flavor + "\n", encoding="utf-8")
 
         bootstrap_command = [
             "unshare", "--mount", "--", "bash", "-c",
@@ -369,7 +373,7 @@ def build_iso(config_path: Path) -> dict[str, Path]:
                 "--mok-manager", str(root_dir / "usr/lib/shim/mmx64.efi.signed"),
                 "-g", str(grub / "live/grub.cfg"),
                 "-g", str(grub / "live/loopback.cfg"),
-                "-t", str(grub / "theme/nitrux"),
+                "-t", str(grub_theme),
                 str(iso_dir), str(image_path),
             ],
             env=env,

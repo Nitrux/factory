@@ -38,7 +38,8 @@ class ISOOrchestrationTests(unittest.TestCase):
             (data_dir / "configs/scripts/stages").mkdir(parents=True)
             (data_dir / "configs/scripts/others").mkdir(parents=True)
             (data_dir / "configs/files/grub_files/live").mkdir(parents=True)
-            (data_dir / "configs/files/grub_files/theme").mkdir(parents=True)
+            grub_theme = data_dir / "configs/files/grub_files/theme/custom"
+            grub_theme.mkdir(parents=True)
             (data_dir / "tooling").mkdir(parents=True)
             for asset in (
                 "bootstrap",
@@ -52,24 +53,23 @@ class ISOOrchestrationTests(unittest.TestCase):
             config_path = work / "iso.yml"
             config = {"iso": {
                 "data_dir": str(data_dir),
+                "grub_theme": "configs/files/grub_files/theme/custom",
                 "rootfs": {"path": str(rootfs_archive)},
                 "output_dir": str(work / "output"),
                 "image": "smoke.iso",
                 "prepare_host": False,
-                "flavor": "nvopen",
                 "stages": ["01-add-build-sources"],
                 "squashfs": {"compression": "zstd", "level": 18},
             }}
             config_path.write_text(yaml.safe_dump(config))
-            mesa_config = {"iso": {
+            second_config = {"iso": {
                 **config["iso"],
-                "output_dir": str(work / "mesa-output"),
-                "image": "mesa-smoke.iso",
-                "flavor": "mesa",
+                "output_dir": str(work / "second-output"),
+                "image": "second-smoke.iso",
             }}
-            mesa_config_path = work / "mesa.yml"
-            mesa_config_path.write_text(yaml.safe_dump(mesa_config))
-            observed = {"stage_environments": []}
+            second_config_path = work / "second.yml"
+            second_config_path.write_text(yaml.safe_dump(second_config))
+            observed = {}
 
             def run(command, **kwargs):
                 if command[0] == "tar":
@@ -100,7 +100,6 @@ class ISOOrchestrationTests(unittest.TestCase):
             def popen(command, **kwargs):
                 observed["stage_root"] = kwargs["cwd"]
                 observed["stage_command"] = command
-                observed["stage_environments"].append(kwargs["env"]["ISO_BRANCH"])
                 return FakeStageRunner()
 
             with patch.object(iso.os, "geteuid", return_value=0), \
@@ -108,14 +107,13 @@ class ISOOrchestrationTests(unittest.TestCase):
                  patch.object(iso.subprocess, "run", side_effect=run), \
                  patch.object(iso.subprocess, "Popen", side_effect=popen):
                 result = iso.build_iso(config_path)
-                mesa_result = iso.build_iso(mesa_config_path)
+                second_result = iso.build_iso(second_config_path)
 
             self.assertTrue(result["image"].is_file())
-            self.assertTrue(mesa_result["image"].is_file())
+            self.assertTrue(second_result["image"].is_file())
             self.assertTrue(result["checksum"].is_file())
             self.assertEqual(len(result["package_lists"]), 2)
             self.assertIn("01-add-build-sources", observed["stage_command"])
-            self.assertEqual(observed["stage_environments"], ["nvopen", "mesa"])
             self.assertIn("--numeric-owner", observed["extract"])
             self.assertIn("--xattrs", observed["extract"])
             self.assertIn("--xattrs-include=*", observed["extract"])

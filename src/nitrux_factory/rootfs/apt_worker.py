@@ -210,6 +210,7 @@ def _download_bootstrap_packages(changes, archives, progress_factory):
             TaskProgressColumn,
             TextColumn,
         )
+        from rich.table import Column
     except ImportError:
         downloaded = []
         total = len(changes)
@@ -219,8 +220,9 @@ def _download_bootstrap_packages(changes, archives, progress_factory):
                 width = 28
                 complete = width * index // total
                 bar = "━" * complete + "─" * (width - complete)
+                package_label = package.name if len(package.name) <= 32 else package.name[:29] + "..."
                 sys.stdout.write(
-                    f"\r\033[1;36m{package.name}\033[0m "
+                    f"\r\033[1;36m{package_label:<32}\033[0m "
                     f"\033[36m{bar}\033[0m {index}/{total}"
                 )
                 sys.stdout.flush()
@@ -234,7 +236,10 @@ def _download_bootstrap_packages(changes, archives, progress_factory):
     downloaded = []
     with Progress(
         SpinnerColumn(),
-        TextColumn("[cyan]{task.fields[package]}"),
+        TextColumn(
+            "[cyan]{task.fields[package]}",
+            table_column=Column(width=32, no_wrap=True, overflow="ellipsis"),
+        ),
         BarColumn(bar_width=28),
         TaskProgressColumn(),
         MofNCompleteColumn(),
